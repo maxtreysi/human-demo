@@ -116,14 +116,25 @@
 <script type="module">
 import Human from "https://cdn.jsdelivr.net/npm/@vladmandic/human/dist/human.esm.js";
 
+// Mobile-friendly config: WASM fallback, smaller models, lower frequency
+const isMobile = /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
 const config = {
-  backend: "webgl",
+  backend: isMobile ? "wasm" : "webgl",
+  wasmPath: "https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm/dist/",
   modelBasePath: "https://cdn.jsdelivr.net/npm/@vladmandic/human/models/",
-  face: { enabled: true, detector: { rotation: true }, emotion: { enabled: true } },
-  hand: { enabled: true },
-  body: { enabled: true },
+  warmup: "face",
+  face: {
+    enabled: true,
+    detector: { rotation: false, maxDetected: 2 },
+    emotion: { enabled: true },
+    iris: { enabled: false },
+    description: { enabled: false },
+  },
+  hand: { enabled: true, maxDetected: 2 },
+  body: { enabled: true, maxDetected: 1 },
   gesture: { enabled: true },
   object: { enabled: false },
+  filter: { enabled: false },
 };
 
 const human = new Human(config);
@@ -144,18 +155,21 @@ const toggles = {
 });
 
 document.getElementById("btn-start").addEventListener("click", async () => {
-  status.textContent = "Загружаю модели (первый раз ~10-20 сек)...";
+  status.textContent = `Загружаю модели (${isMobile ? "mobile WASM" : "WebGL"}, ~10-20 сек)...`;
   try {
     await human.load();
-    status.textContent = "Модели загружены. Запрашиваю камеру...";
+    status.textContent = "Модели загружены. Прогреваю...";
+    await human.warmup();
+    status.textContent = "Прогрето. Запрашиваю камеру...";
     const stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: "user", width: 720, height: 540 }
+      video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } }
     });
     video.srcObject = stream;
     await new Promise(r => video.onloadedmetadata = r);
+    await video.play();
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
-    status.textContent = "Запущено. Смотри в камеру.";
+    status.textContent = `Запущено (${video.videoWidth}×${video.videoHeight}, ${config.backend}).`;
     loop();
   } catch (err) {
     status.textContent = `Ошибка: ${err.message}`;
@@ -167,7 +181,15 @@ let lastFps = performance.now();
 let frames = 0;
 
 async function loop() {
-  const result = await human.detect(video);
+  let result;
+  try {
+    result = await human.detect(video);
+  } catch (err) {
+    status.textContent = `Detect error: ${err.message}`;
+    console.error(err);
+    setTimeout(loop, 500);
+    return;
+  }
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
   const drawOpts = {
