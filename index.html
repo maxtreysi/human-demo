@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Human AI — Demo (Myndex Lab)</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", sans-serif;
+    background: #0a0a0a;
+    color: #fff;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 20px;
+  }
+  h1 { font-size: 1.5rem; margin-bottom: 0.5rem; font-weight: 600; }
+  .sub { color: #888; margin-bottom: 1.5rem; font-size: 0.9rem; }
+  .container {
+    position: relative;
+    width: 100%;
+    max-width: 720px;
+    aspect-ratio: 4/3;
+    background: #1a1a1a;
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+  }
+  video, canvas {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%;
+    height: 100%;
+  }
+  video { z-index: 1; transform: scaleX(-1); }
+  canvas { z-index: 2; transform: scaleX(-1); }
+  .controls {
+    margin-top: 1rem;
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  button {
+    background: #2a2a2a;
+    color: #fff;
+    border: 1px solid #3a3a3a;
+    padding: 10px 16px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    transition: all 0.2s;
+  }
+  button:hover:not(:disabled) { background: #3a3a3a; border-color: #555; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  button.active { background: #3b82f6; border-color: #3b82f6; }
+  .status {
+    margin-top: 1rem;
+    padding: 8px 16px;
+    background: #1a1a1a;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    color: #aaa;
+    font-family: monospace;
+    min-height: 32px;
+  }
+  .stats {
+    margin-top: 0.5rem;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 8px;
+    max-width: 720px;
+    width: 100%;
+  }
+  .stat {
+    background: #1a1a1a;
+    padding: 10px;
+    border-radius: 6px;
+    text-align: center;
+  }
+  .stat-label { color: #666; font-size: 0.75rem; text-transform: uppercase; }
+  .stat-value { color: #fff; font-size: 1.1rem; margin-top: 2px; font-weight: 600; }
+</style>
+</head>
+<body>
+  <h1>Human AI — Detection Demo</h1>
+  <div class="sub">vladmandic/human · TensorFlow.js · браузерный трекинг</div>
+
+  <div class="container">
+    <video id="video" autoplay muted playsinline></video>
+    <canvas id="canvas"></canvas>
+  </div>
+
+  <div class="controls">
+    <button id="btn-start">▶ Старт камеры</button>
+    <button id="btn-face" class="active">Лицо</button>
+    <button id="btn-hand" class="active">Руки</button>
+    <button id="btn-body" class="active">Поза</button>
+    <button id="btn-gesture" class="active">Жесты</button>
+    <button id="btn-emotion" class="active">Эмоции</button>
+  </div>
+
+  <div class="status" id="status">Нажми «Старт камеры» → разреши доступ к вебке в браузере</div>
+
+  <div class="stats">
+    <div class="stat"><div class="stat-label">FPS</div><div class="stat-value" id="fps">—</div></div>
+    <div class="stat"><div class="stat-label">Лица</div><div class="stat-value" id="n-face">0</div></div>
+    <div class="stat"><div class="stat-label">Руки</div><div class="stat-value" id="n-hand">0</div></div>
+    <div class="stat"><div class="stat-label">Тела</div><div class="stat-value" id="n-body">0</div></div>
+    <div class="stat"><div class="stat-label">Жест</div><div class="stat-value" id="gesture">—</div></div>
+    <div class="stat"><div class="stat-label">Эмоция</div><div class="stat-value" id="emotion">—</div></div>
+  </div>
+
+<script type="module">
+import Human from "https://cdn.jsdelivr.net/npm/@vladmandic/human/dist/human.esm.js";
+
+const config = {
+  backend: "webgl",
+  modelBasePath: "https://cdn.jsdelivr.net/npm/@vladmandic/human/models/",
+  face: { enabled: true, detector: { rotation: true }, emotion: { enabled: true } },
+  hand: { enabled: true },
+  body: { enabled: true },
+  gesture: { enabled: true },
+  object: { enabled: false },
+};
+
+const human = new Human(config);
+const video = document.getElementById("video");
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+const status = document.getElementById("status");
+
+const toggles = {
+  face: true, hand: true, body: true, gesture: true, emotion: true,
+};
+
+["face", "hand", "body", "gesture", "emotion"].forEach(k => {
+  document.getElementById(`btn-${k}`).addEventListener("click", (e) => {
+    toggles[k] = !toggles[k];
+    e.target.classList.toggle("active", toggles[k]);
+  });
+});
+
+document.getElementById("btn-start").addEventListener("click", async () => {
+  status.textContent = "Загружаю модели (первый раз ~10-20 сек)...";
+  try {
+    await human.load();
+    status.textContent = "Модели загружены. Запрашиваю камеру...";
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: "user", width: 720, height: 540 }
+    });
+    video.srcObject = stream;
+    await new Promise(r => video.onloadedmetadata = r);
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    status.textContent = "Запущено. Смотри в камеру.";
+    loop();
+  } catch (err) {
+    status.textContent = `Ошибка: ${err.message}`;
+    console.error(err);
+  }
+});
+
+let lastFps = performance.now();
+let frames = 0;
+
+async function loop() {
+  const result = await human.detect(video);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  const drawOpts = {
+    drawGaze: false,
+    drawLabels: false,
+    lineWidth: 2,
+    color: "rgba(59, 130, 246, 0.9)",
+    labelColor: "white",
+  };
+
+  if (toggles.face && result.face?.length) human.draw.face(canvas, result.face, drawOpts);
+  if (toggles.hand && result.hand?.length) human.draw.hand(canvas, result.hand, drawOpts);
+  if (toggles.body && result.body?.length) human.draw.body(canvas, result.body, drawOpts);
+  if (toggles.gesture && result.gesture?.length) human.draw.gesture(canvas, result.gesture, drawOpts);
+
+  document.getElementById("n-face").textContent = result.face?.length || 0;
+  document.getElementById("n-hand").textContent = result.hand?.length || 0;
+  document.getElementById("n-body").textContent = result.body?.length || 0;
+
+  if (toggles.emotion && result.face?.[0]?.emotion?.[0]) {
+    const top = result.face[0].emotion[0];
+    document.getElementById("emotion").textContent = `${top.emotion} ${Math.round(top.score*100)}%`;
+  } else {
+    document.getElementById("emotion").textContent = "—";
+  }
+
+  if (toggles.gesture && result.gesture?.length) {
+    const last = result.gesture[result.gesture.length - 1];
+    document.getElementById("gesture").textContent = last.gesture || "—";
+  } else {
+    document.getElementById("gesture").textContent = "—";
+  }
+
+  frames++;
+  const now = performance.now();
+  if (now - lastFps >= 1000) {
+    document.getElementById("fps").textContent = frames;
+    frames = 0;
+    lastFps = now;
+  }
+
+  requestAnimationFrame(loop);
+}
+</script>
+</body>
+</html>
